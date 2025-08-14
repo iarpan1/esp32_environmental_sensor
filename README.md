@@ -10,11 +10,11 @@
 - Export session data to CSV with one click  
 
 1. Clone the repository:
-```bash
+bash
 git clone https://github.com/yourusername/environment-prediction-model.git
 2. Open `index.html` in a web browser.
 3. Set your ESP32 IP in the JS code:
-```javascript
+javascript
 const ESP32_IP = "192.168.101.10";
 4. Start monitoring and click **Download Excel** to save data.
 
