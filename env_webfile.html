@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ESP32 Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  margin:0; padding:20px; background: linear-gradient(135deg, #1e3c72, #2a5298); color:#fff;
+}
+h1 { text-align:center; margin-bottom:30px; font-size:2.5em; font-weight:600; }
+.cards { display:flex; justify-content:center; gap:30px; margin-bottom:40px; flex-wrap:wrap;}
+.card { background: rgba(44, 62, 80,0.9); border-radius:20px; padding:25px; width:200px; text-align:center; box-shadow:0 4px 10px rgba(0,0,0,0.3);}
+.card h2 { margin-bottom:15px; font-size:1.6em; }
+.card p { font-size:1.6em; font-weight:bold; }
+.gas-safe { color:#2ecc71; } .gas-moderate { color:#f1c40f; } .gas-harmful { color:#e74c3c; }
+
+.gauges { display:flex; justify-content:center; gap:50px; flex-wrap:wrap; margin-bottom:40px; }
+.gauge-container { width:280px; height:180px; position: relative; }
+
+.chart-table-container { display:flex; gap:20px; flex-wrap:wrap;}
+.chart-container { display:flex; flex-wrap:wrap; gap:20px; justify-content:center; flex:1; }
+.chart-box { flex:1; min-width:300px; background: rgba(44,62,80,0.85); padding:20px; border-radius:20px; box-shadow:0 4px 10px rgba(0,0,0,0.3);}
+.table-container { flex:1; min-width:400px; background: rgba(44,62,80,0.85); padding:20px; border-radius:20px; box-shadow:0 4px 10px rgba(0,0,0,0.3); }
+
+button { display:block; margin:0 auto 20px; padding:12px 25px; background:#2980b9; border:none; border-radius:10px; color:#fff; font-size:1.2em; cursor:pointer; transition:0.3s;}
+button:hover { background:#3498db; }
+
+.table-container table { width:100%; border-collapse:collapse; color:#fff; font-size:1.1em;}
+th, td { border-bottom:1px solid rgba(255,255,255,0.3); padding:10px; text-align:center; }
+tr.safe { background: rgba(46, 204, 113, 0.2);}
+tr.moderate { background: rgba(241, 196, 15, 0.2);}
+tr.harmful { background: rgba(231, 76, 60, 0.2);}
+</style>
+</head>
+<body>
+
+<h1>Environment Prediction Model</h1>
+
+<div class="cards">
+  <div class="card"><h2>Temperature</h2><p id="temp">-- °C</p></div>
+  <div class="card"><h2>Humidity</h2><p id="hum">-- %</p></div>
+  <div class="card"><h2>Air Quality</h2><p id="gas" class="gas-safe">--</p></div>
+</div>
+
+<div class="gauges">
+  <div class="gauge-container"><canvas id="tempGauge" width="280" height="180"></canvas></div>
+  <div class="gauge-container"><canvas id="humGauge" width="280" height="180"></canvas></div>
+  <div class="gauge-container"><canvas id="gasGauge" width="280" height="180"></canvas></div>
+</div>
+
+<button id="toggleView">Show Table</button>
+<button id="downloadCSV">Download Excel</button>
+
+<div class="chart-table-container">
+  <div class="chart-container" id="charts">
+    <div class="chart-box">
+      <canvas id="tempChart" height="250"></canvas>
+    </div>
+    <div class="chart-box">
+      <canvas id="humChart" height="250"></canvas>
+    </div>
+  </div>
+
+  <div class="table-container" id="table" style="display:none;">
+    <table>
+      <thead><tr><th>Time</th><th>Temperature (°C)</th><th>Humidity (%)</th><th>Air Quality</th></tr></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const ESP32_IP="192.168.101.10"; // replace with your ESP32 IP
+let sensorData=[]; // store past data
+
+// Charts
+const tempChart=new Chart(document.getElementById('tempChart').getContext('2d'),{
+  type:'line', data:{labels:[], datasets:[{label:'Temperature (°C)', data:[], borderColor:'#e74c3c', fill:false, tension:0.1}]},
+  options:{animation:false, responsive:true, plugins:{legend:{labels:{font:{size:16}, color:'#fff'}}}, scales:{x:{ticks:{color:'#fff'}}, y:{ticks:{color:'#fff'}}}}
+});
+const humChart=new Chart(document.getElementById('humChart').getContext('2d'),{
+  type:'line', data:{labels:[], datasets:[{label:'Humidity (%)', data:[], borderColor:'#3498db', fill:false, tension:0.1}]},
+  options:{animation:false, responsive:true, plugins:{legend:{labels:{font:{size:16}, color:'#fff'}}}, scales:{x:{ticks:{color:'#fff'}}, y:{ticks:{color:'#fff'}}}}
+});
+
+function addData(chart,label,value){
+  chart.data.labels.push(label);
+  chart.data.datasets[0].data.push(value);
+  if(chart.data.labels.length>20){ chart.data.labels.shift(); chart.data.datasets[0].data.shift();}
+  chart.update();
+}
+
+// Gauge class
+class Gauge{
+  constructor(canvas,maxValue,label,zones){ this.canvas=canvas; this.ctx=canvas.getContext('2d'); this.max=maxValue; this.label=label; this.zones=zones; this.value=0; this.animatedValue=0;}
+  draw(){
+    const ctx=this.ctx,w=this.canvas.width,h=this.canvas.height;
+    ctx.clearRect(0,0,w,h);
+    const cx=w/2,cy=h*0.9,radius=Math.min(cx,cy)-20;
+    this.zones.forEach(zone=>{const s=Math.PI+zone.min/this.max*Math.PI; const e=Math.PI+zone.max/this.max*Math.PI; ctx.beginPath(); ctx.arc(cx,cy,radius,s,e); ctx.lineWidth=15; ctx.strokeStyle=zone.color; ctx.stroke();});
+    const angle=Math.PI+this.animatedValue/this.max*Math.PI;
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+radius*Math.cos(angle),cy+radius*Math.sin(angle)); ctx.lineWidth=4; ctx.strokeStyle='#fff'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx,cy,8,0,2*Math.PI); ctx.fillStyle='#fff'; ctx.fill();
+    ctx.font='14px Segoe UI'; ctx.fillStyle='#fff'; ctx.textAlign='center';
+    ctx.fillText(this.label, cx, cy-radius-10); ctx.fillText(this.value.toFixed(1), cx, cy-radius/1.5);
+    ctx.font='12px Segoe UI'; ctx.fillText('0', cx-radius+10, cy-5); ctx.fillText(this.max, cx+radius-10, cy-5);
+  }
+  update(value){ this.value=value; const animate=()=>{ const diff=value-this.animatedValue; if(Math.abs(diff)<0.1){ this.animatedValue=value; this.draw(); return;} this.animatedValue+=diff*0.1; this.draw(); requestAnimationFrame(animate); }; animate();}
+}
+
+const zonesTemp=[{min:0,max:30,color:'#2ecc71'},{min:30,max:40,color:'#f1c40f'},{min:40,max:50,color:'#e74c3c'}];
+const zonesHum=[{min:0,max:60,color:'#2ecc71'},{min:60,max:80,color:'#f1c40f'},{min:80,max:100,color:'#e74c3c'}];
+const zonesGas=[{min:0,max:40,color:'#2ecc71'},{min:40,max:70,color:'#f1c40f'},{min:70,max:100,color:'#e74c3c'}];
+
+const tempGauge=new Gauge(document.getElementById('tempGauge'),50,'Temperature (°C)',zonesTemp);
+const humGauge=new Gauge(document.getElementById('humGauge'),100,'Humidity (%)',zonesHum);
+const gasGauge=new Gauge(document.getElementById('gasGauge'),100,'Air Quality (%)',zonesGas);
+
+const tableBody=document.getElementById('tableBody');
+
+async function fetchData(){
+  try{
+    const resp=await fetch(`http://${ESP32_IP}/data`);
+    const data=await resp.json();
+    const now=new Date().toLocaleTimeString();
+
+    // Update cards
+    document.getElementById('temp').innerText=data.temperature.toFixed(1)+' °C';
+    document.getElementById('hum').innerText=data.humidity.toFixed(1)+' %';
+    const gasElem=document.getElementById('gas');
+    gasElem.innerText=data.gas;
+    gasElem.className=data.gas==='Harmful'?'gas-harmful':data.gas==='Moderate'?'gas-moderate':'gas-safe';
+
+    // Update gauges
+    tempGauge.update(data.temperature); humGauge.update(data.humidity); gasGauge.update(data.gasLevel||20);
+
+    // Update charts
+    addData(tempChart,now,data.temperature);
+    addData(humChart,now,data.humidity);
+
+    // Update table
+    const row=document.createElement('tr');
+    const level=data.gas==='Harmful'?'harmful':data.gas==='Moderate'?'moderate':'safe';
+    row.className=level;
+    row.innerHTML=`<td>${now}</td><td>${data.temperature.toFixed(1)}</td><td>${data.humidity.toFixed(1)}</td><td>${data.gas}</td>`;
+    tableBody.prepend(row);
+    if(tableBody.rows.length>20) tableBody.deleteRow(-1);
+
+    // Store for CSV
+    sensorData.push([now, data.temperature.toFixed(1), data.humidity.toFixed(1), data.gas]);
+
+  }catch(e){ console.warn(e);}
+}
+setInterval(fetchData,2000);
+fetchData();
+
+// Toggle table/chart
+const toggleBtn=document.getElementById('toggleView');
+const tableDiv=document.getElementById('table');
+const chartsDiv=document.getElementById('charts');
+toggleBtn.addEventListener('click',()=>{
+  if(tableDiv.style.display==='none'){ tableDiv.style.display='block'; chartsDiv.style.display='none'; toggleBtn.innerText='Show Charts'; }
+  else{ tableDiv.style.display='none'; chartsDiv.style.display='flex'; toggleBtn.innerText='Show Table'; }
+});
+
+// Download CSV/Excel
+document.getElementById('downloadCSV').addEventListener('click',()=>{
+  if(sensorData.length===0){ alert("No data yet!"); return; }
+  let csvContent="data:text/csv;charset=utf-8,Time,Temperature (°C),Humidity (%),Air Quality\n";
+  sensorData.forEach(row=>{ csvContent+=row.join(",")+"\n"; });
+  const encodedUri=encodeURI(csvContent);
+  const link=document.createElement("a");
+  link.setAttribute("href",encodedUri);
+  link.setAttribute("download","ESP32_Sensor_Data.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+});
+</script>
+</body>
+</html>
