@@ -30,9 +30,6 @@ Historical Data Table
 <p align="center">
   <img src="https://github.com/iarpan1/esp32_environmental_sensor/blob/master/img/Screenshot%202025-08-15%20021541.png?raw=true" alt="Historical Table" width="600"/>
 </p>
-Sure! Let’s break it down carefully:
-
----
 
 ### **MQ-135 Calibration and Voltage Details**
 
